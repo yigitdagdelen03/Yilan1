@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yılan Oyunu</title>
+<meta name="theme-color" content="#0d1117">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Yılan">
+<style>
+  body { touch-action:manipulation; -webkit-user-select:none; user-select:none; background:#0d1117; color:#fff; font-family:sans-serif; text-align:center; margin:0; padding:16px; }
+  canvas { border:3px solid #2e7d32; border-radius:12px; max-width:100%; box-shadow:0 0 24px rgba(76,175,80,0.35); }
+  .ust { display:flex; justify-content:center; align-items:center; gap:16px; margin-bottom:10px; font-size:18px; }
+  #sesButonu { border:none; border-radius:10px; background:#222; color:#fff; padding:8px 12px; font-size:14px; }
+  .kontrol { display:grid; grid-template-columns:repeat(3,64px); gap:8px; justify-content:center; margin-top:16px; }
+  .kontrol button { height:64px; font-size:24px; border:none; border-radius:14px; background:#222; color:#fff; }
+  .kontrol button:active { background:#4caf50; }
+  #yeniden { margin-top:16px; padding:12px 24px; font-size:16px; border:none; border-radius:12px; background:#4caf50; color:#fff; display:none; }
+</style>
+</head>
+<body>
+
+<h2>Yılan Oyunu</h2>
+<div class="ust">
+  <div>Skor: <span id="skor">0</span></div>
+  <button id="sesButonu">🔊 Ses: Açık</button>
+</div>
+<canvas id="oyun" width="400" height="400"></canvas>
+<div><button id="yeniden">Yeniden Başla</button></div>
+
+<div class="kontrol">
+  <span></span><button id="yukari">↑</button><span></span>
+  <button id="sol">←</button><button id="asagi">↓</button><button id="sag">→</button>
+</div>
+
+<script>
+  const tuval = document.getElementById("oyun");
+  const cizim = tuval.getContext("2d");
+  const skorYazisi = document.getElementById("skor");
+  const yenidenButonu = document.getElementById("yeniden");
+  const sesButonu = document.getElementById("sesButonu");
+
+  const kareBoyu = 20;
+  const kareSayisi = 20;
+
+  let yilan, yon, sonrakiYon, yem, skor, oyunBitti;
+
+  // ---------------------------------------------------------------
+  // SES: Dosya kullanmadan, tarayıcının kendi ses motoruyla bip sesi üretiyoruz
+  // ---------------------------------------------------------------
+  let sesAcik = true;
+  let sesBaglami = null;
+
+  // Tarayıcılar sesi ancak kullanıcı bir şeye dokununca başlatmaya izin verir.
+  // Bu yüzden ilk tuşa/butona basışta çağırıyoruz.
+  function sesHazirla() {
+    if (!sesBaglami) {
+      sesBaglami = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (sesBaglami.state === "suspended") sesBaglami.resume();
+  }
+
+  // frekans: sesin inceliği (Hz), sure: saniye, tip: dalga şekli, gecikme: kaç sn sonra çalsın
+  function ses(frekans, sure, tip, gecikme) {
+    if (!sesAcik || !sesBaglami) return;
+    const t = sesBaglami.currentTime + (gecikme || 0);
+    const osc = sesBaglami.createOscillator();   // sesi üreten parça
+    const kazanc = sesBaglami.createGain();      // ses seviyesi düğmesi
+    osc.type = tip;
+    osc.frequency.setValueAtTime(frekans, t);
+    kazanc.gain.setValueAtTime(0.15, t);
+    kazanc.gain.exponentialRampToValueAtTime(0.001, t + sure); // yavaşça kısıl
+    osc.connect(kazanc);
+    kazanc.connect(sesBaglami.destination);      // hoparlöre bağla
+    osc.start(t);
+    osc.stop(t + sure);
+  }
+
+  function yemSesi() {
+    ses(660, 0.1, "square", 0);
+    ses(990, 0.12, "square", 0.08);
+  }
+
+  function bitisSesi() {
+    ses(300, 0.2, "sawtooth", 0);
+    ses(220, 0.2, "sawtooth", 0.18);
+    ses(150, 0.4, "sawtooth", 0.36);
+  }
+
+  sesButonu.onclick = function () {
+    sesHazirla();
+    sesAcik = !sesAcik;
+    sesButonu.textContent = sesAcik ? "🔊 Ses: Açık" : "🔇 Ses: Kapalı";
+  };
+
+  // ---------------------------------------------------------------
+  // OYUN MANTIĞI
+  // ---------------------------------------------------------------
+  function oyunuBaslat() {
+    yilan = [{ x: 10, y: 10 }];
+    yon = { x: 1, y: 0 };
+    sonrakiYon = { x: 1, y: 0 };
+    skor = 0;
+    oyunBitti = false;
+    skorYazisi.textContent = skor;
+    yenidenButonu.style.display = "none";
+    yem = yemUret();
+  }
+
+  function oyunuBitir() {
+    oyunBitti = true;
+    bitisSesi();
+    yenidenButonu.style.display = "inline-block";
+  }
+
+  function yemUret() {
+    let yeni;
+    do {
+      yeni = {
+        x: Math.floor(Math.random() * kareSayisi),
+        y: Math.floor(Math.random() * kareSayisi)
+      };
+    } while (yilan.some(parca => parca.x === yeni.x && parca.y === yeni.y));
+    return yeni;
+  }
+
+  function guncelle() {
+    if (oyunBitti) return;
+
+    yon = sonrakiYon;
+
+    const yeniBas = { x: yilan[0].x + yon.x, y: yilan[0].y + yon.y };
+
+    // Duvardan geçince karşı taraftan çık (% işlemi sayıyı tahtanın içinde tutar)
+    yeniBas.x = (yeniBas.x + kareSayisi) % kareSayisi;
+    yeniBas.y = (yeniBas.y + kareSayisi) % kareSayisi;
+
+    if (yilan.some(parca => parca.x === yeniBas.x && parca.y === yeniBas.y)) {
+      oyunuBitir();
+      return;
+    }
+
+    yilan.unshift(yeniBas);
+
+    if (yeniBas.x === yem.x && yeniBas.y === yem.y) {
+      skor += 1;
+      skorYazisi.textContent = skor;
+      yemSesi();
+      yem = yemUret();
+    } else {
+      yilan.pop();
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // ÇİZİM: Artık hepsi ayrı küçük fonksiyonlarda
+  // ---------------------------------------------------------------
+
+  // Köşeleri yuvarlak kare çizen yardımcı fonksiyon
+  function yuvarlakKare(x, y, w, h, r) {
+    cizim.beginPath();
+    cizim.moveTo(x + r, y);
+    cizim.arcTo(x + w, y, x + w, y + h, r);
+    cizim.arcTo(x + w, y + h, x, y + h, r);
+    cizim.arcTo(x, y + h, x, y, r);
+    cizim.arcTo(x, y, x + w, y, r);
+    cizim.closePath();
+    cizim.fill();
+  }
+
+  // Satranç tahtası gibi iki tonlu zemin
+  function zeminiCiz() {
+    for (let x = 0; x < kareSayisi; x++) {
+      for (let y = 0; y < kareSayisi; y++) {
+        cizim.fillStyle = ((x + y) % 2 === 0) ? "#161b22" : "#1c232c";
+        cizim.fillRect(x * kareBoyu, y * kareBoyu, kareBoyu, kareBoyu);
+      }
+    }
+  }
+
+  // Yem: parlayan ve hafifçe "nefes alan" kırmızı elma
+  function yemiCiz() {
+    const merkezX = yem.x * kareBoyu + kareBoyu / 2;
+    const merkezY = yem.y * kareBoyu + kareBoyu / 2;
+    const nabiz = 1 + Math.sin(Date.now() / 150) * 0.12; // zamanla 0.88 - 1.12 arası değişir
+
+    cizim.shadowColor = "#ff5252";
+    cizim.shadowBlur = 14;
+    cizim.fillStyle = "#e53935";
+    cizim.beginPath();
+    cizim.arc(merkezX, merkezY + 1, 7 * nabiz, 0, Math.PI * 2);
+    cizim.fill();
+    cizim.shadowBlur = 0; // parlamayı kapat ki başka şeyler parlamasın
+
+    // küçük yaprak
+    cizim.fillStyle = "#66bb6a";
+    cizim.fillRect(merkezX - 1, merkezY - 8, 3, 4);
+  }
+
+  // Yılan: baştan kuyruğa doğru renk koyulaşır ve incelir
+  function yilaniCiz() {
+    for (let i = yilan.length - 1; i >= 0; i--) {
+      const oran = i / Math.max(yilan.length - 1, 1);   // baş = 0, kuyruk = 1
+      const boy = (kareBoyu - 2) - oran * 4;            // kuyruğa doğru incelir
+      const bosluk = (kareBoyu - boy) / 2;
+      cizim.fillStyle = "hsl(140, 60%, " + (58 - oran * 22) + "%)";
+      yuvarlakKare(
+        yilan[i].x * kareBoyu + bosluk,
+        yilan[i].y * kareBoyu + bosluk,
+        boy, boy, 5
+      );
+    }
+    gozleriCiz();
+  }
+
+  // Gözler: bakılan yöne göre kaydırılır
+  function gozleriCiz() {
+    const bas = yilan[0];
+    const mx = bas.x * kareBoyu + kareBoyu / 2;
+    const my = bas.y * kareBoyu + kareBoyu / 2;
+    const yanX = -yon.y;  // yöne dik olan yön (iki göz yan yana dursun diye)
+    const yanY = yon.x;
+
+    for (let taraf = -1; taraf <= 1; taraf += 2) {
+      const gx = mx + yon.x * 4 + yanX * 4 * taraf;
+      const gy = my + yon.y * 4 + yanY * 4 * taraf;
+      cizim.fillStyle = "#fff";
+      cizim.beginPath();
+      cizim.arc(gx, gy, 3, 0, Math.PI * 2);
+      cizim.fill();
+      cizim.fillStyle = "#111";
+      cizim.beginPath();
+      cizim.arc(gx + yon.x * 1, gy + yon.y * 1, 1.5, 0, Math.PI * 2);
+      cizim.fill();
+    }
+  }
+
+  function oyunBittiEkraniniCiz() {
+    cizim.fillStyle = "rgba(0, 0, 0, 0.65)";
+    cizim.fillRect(0, 0, tuval.width, tuval.height);
+    cizim.fillStyle = "#fff";
+    cizim.textAlign = "center";
+    cizim.font = "bold 34px sans-serif";
+    cizim.fillText("Oyun Bitti", tuval.width / 2, tuval.height / 2 - 10);
+    cizim.font = "20px sans-serif";
+    cizim.fillText("Skor: " + skor, tuval.width / 2, tuval.height / 2 + 26);
+  }
+
+  function ciz() {
+    zeminiCiz();
+    yemiCiz();
+    yilaniCiz();
+    if (oyunBitti) oyunBittiEkraniniCiz();
+  }
+
+  // ---------------------------------------------------------------
+  // İKİ AYRI DÖNGÜ:
+  // 1) Mantık: yılan her 150 ms'de bir kare ilerler
+  // 2) Çizim: ekran saniyede ~60 kez yenilenir (yemin nabzı akıcı olsun diye)
+  // ---------------------------------------------------------------
+  setInterval(guncelle, 150);
+
+  function cizimDongusu() {
+    ciz();
+    requestAnimationFrame(cizimDongusu);
+  }
+
+  // ---------------------------------------------------------------
+  // KONTROLLER
+  // ---------------------------------------------------------------
+  function yonDegistir(x, y) {
+    sesHazirla();
+    if (x === -yon.x && y === -yon.y) return;
+    sonrakiYon = { x: x, y: y };
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowUp")    yonDegistir(0, -1);
+    if (e.key === "ArrowDown")  yonDegistir(0, 1);
+    if (e.key === "ArrowLeft")  yonDegistir(-1, 0);
+    if (e.key === "ArrowRight") yonDegistir(1, 0);
+    if (e.key === "Enter" && oyunBitti) oyunuBaslat();
+  });
+
+  document.getElementById("yukari").onclick = () => yonDegistir(0, -1);
+  document.getElementById("asagi").onclick  = () => yonDegistir(0, 1);
+  document.getElementById("sol").onclick    = () => yonDegistir(-1, 0);
+  document.getElementById("sag").onclick    = () => yonDegistir(1, 0);
+  yenidenButonu.onclick = function () { sesHazirla(); oyunuBaslat(); };
+
+  oyunuBaslat();
+  cizimDongusu();
+
+  // PWA: çevrimdışı çalışması için service worker kaydı
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js");
+  }
+</script>
+</body>
+</html>
